@@ -42,15 +42,18 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: 'npm'
 
       - name: 📦 Install Node dependencies
         shell: bash
         run: |
-          if [ -f package-lock.json ]; then
-            npm ci || npm install
-          else
-            npm install
+          # Remove Linux-generated lockfile so npm resolves Windows optional native bindings cleanly (npm/cli#4828)
+          rm -rf package-lock.json node_modules
+          npm install --include=optional --no-audit --no-fund
+          if ! node --input-type=module -e "await import('rolldown')" 2>/dev/null; then
+            ROLLDOWN_VER=$(node -p "require('./node_modules/rolldown/package.json').version")
+            echo "Installing missing @rolldown/binding-win32-x64-msvc@${ROLLDOWN_VER}..."
+            npm install --no-save --no-audit --no-fund "@rolldown/binding-win32-x64-msvc@${ROLLDOWN_VER}"
+            node --input-type=module -e "await import('rolldown')"
           fi
 
       - name: 🏗️ Build Web Assets (Vite)
