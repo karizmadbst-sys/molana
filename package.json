@@ -48,9 +48,10 @@
           ]
         }
       ],
-      "artifactName": "ECHO-The-World-Remembers-${version}-${arch}-${target}.${ext}"
+      "artifactName": "ECHO-The-World-Remembers-${version}-${arch}.${ext}"
     },
     "nsis": {
+      "artifactName": "ECHO-The-World-Remembers-${version}-${arch}-Setup.${ext}",
       "oneClick": false,
       "perMachine": false,
       "allowToChangeInstallationDirectory": true,
