@@ -1,0 +1,96 @@
+name: Build Windows EXE (ECHO)
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+    inputs:
+      build_target:
+        description: 'Windows EXE Build Target'
+        required: true
+        default: 'both'
+        type: choice
+        options:
+          - both
+          - portable
+          - installer
+      create_release:
+        description: 'Publish EXE files as a GitHub Release'
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-windows-exe:
+    name: 🪟 Build Windows EXE
+    runs-on: windows-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🟢 Setup Node.js (v22 LTS)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+
+      - name: 📦 Install Node dependencies
+        shell: bash
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci || npm install
+          else
+            npm install
+          fi
+
+      - name: 🏗️ Build Web Assets (Vite)
+        shell: bash
+        run: |
+          npm run build
+
+      - name: 🎮 Package Windows EXE (Electron Builder)
+        shell: bash
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: |
+          TARGET="${{ github.event.inputs.build_target || 'both' }}"
+          if [ "$TARGET" = "portable" ]; then
+            npx electron-builder --win portable --x64 --publish never
+          elif [ "$TARGET" = "installer" ]; then
+            npx electron-builder --win nsis --x64 --publish never
+          else
+            npx electron-builder --win nsis portable --x64 --publish never
+          fi
+
+          mkdir -p output-exe
+          cp release/*.exe output-exe/
+          ls -lh output-exe/
+
+      - name: 📤 Upload Windows EXE Artifact to GitHub
+        uses: actions/upload-artifact@v4
+        with:
+          name: ECHO-Windows-EXE
+          path: output-exe/*.exe
+          retention-days: 30
+
+      - name: 🚀 Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.create_release == true || github.event.inputs.create_release == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: output-exe/*.exe
+          name: Release ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
