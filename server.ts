@@ -995,6 +995,27 @@ class EchoMultiplayerServer {
         });
         break;
       }
+
+      case 'C_PORTAL_TRAVEL': {
+        const targetRealm: RealmId = packet.targetRealm === 'DARK_REALM' ? 'DARK_REALM' : 'ISLAND';
+        const scope = packet.scope === 'PARTY' ? 'PARTY' : 'ROOM';
+        const room = this.rooms.get(client.roomId);
+        const portalPacket = {
+          type: 'S_PORTAL_TRAVEL',
+          initiatorId: client.playerId,
+          initiatorName: client.profile.username,
+          targetRealm,
+          scope,
+          crystalsCount: room?.crystals.size ?? 0,
+          timestamp: Date.now(),
+        };
+        if (scope === 'PARTY' && client.partyId) {
+          this.broadcastParty(client.partyId, portalPacket, client.playerId);
+        } else {
+          this.broadcastRoom(client.roomId, portalPacket, client.playerId);
+        }
+        break;
+      }
     }
   }
 
@@ -1301,9 +1322,62 @@ async function startServer(): Promise<void> {
   app.use(express.json());
 
   const mpServer = new EchoMultiplayerServer();
+  const localCloudSaves = new Map<string, { save: unknown; darkProgress: unknown; updatedAt: number }>();
 
   app.get('/api/health', (_req, res) => {
     res.json({ ok: true, service: 'echo-multiplayer', timestamp: Date.now() });
+  });
+
+  app.post('/api/auth/session', (req, res) => {
+    const playerId = String(req.body?.playerId || req.body?.profile?.id || '').trim();
+    if (!playerId) {
+      res.status(400).json({ ok: false, error: 'Missing playerId' });
+      return;
+    }
+    const existing = localCloudSaves.get(playerId);
+    res.json({
+      ok: true,
+      playerId,
+      token: `local_${playerId}_${Date.now()}`,
+      expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000,
+      cloudUpdatedAt: existing?.updatedAt || 0,
+    });
+  });
+
+  app.get('/api/player/save', (req, res) => {
+    const auth = String(req.headers.authorization || '');
+    const token = auth.replace(/^Bearer\s+/i, '');
+    const match = token.match(/^local_(.+)_\d+$/);
+    const pid = match?.[1];
+    if (!pid) {
+      res.status(401).json({ ok: false, error: 'Unauthorized' });
+      return;
+    }
+    const entry = localCloudSaves.get(pid);
+    res.json({
+      ok: true,
+      save: entry?.save ?? null,
+      darkProgress: entry?.darkProgress ?? null,
+      updatedAt: entry?.updatedAt ?? 0,
+    });
+  });
+
+  app.post('/api/player/save', (req, res) => {
+    const auth = String(req.headers.authorization || '');
+    const token = auth.replace(/^Bearer\s+/i, '');
+    const match = token.match(/^local_(.+)_\d+$/);
+    const pid = match?.[1];
+    if (!pid) {
+      res.status(401).json({ ok: false, error: 'Unauthorized' });
+      return;
+    }
+    const updatedAt = Date.now();
+    localCloudSaves.set(pid, {
+      save: req.body?.save ?? null,
+      darkProgress: req.body?.darkProgress ?? null,
+      updatedAt,
+    });
+    res.json({ ok: true, updatedAt });
   });
 
   const server = http.createServer(app);

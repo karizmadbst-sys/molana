@@ -87,7 +87,7 @@ export class Game {
   private w1RightHoldElapsed: number = 0;
   private w1WasRightHeld: boolean = false;
   private readonly aimForward = new THREE.Vector3();
-  private isMobileDevice: boolean = false;
+  public isMobileDevice: boolean = false;
   public weaponSystem!: WeaponSystem;
   private touchAttackHeld: boolean = false;
   private bubblePoints!: THREE.Points;
@@ -776,11 +776,11 @@ export class Game {
     this.companions.group.visible = visible;
   }
 
-  public enterDarkRealm(): void {
+  public enterDarkRealm(fromRemoteSync: boolean = false): void {
     // Enforce collecting all 7 Echo Crystals before unlocking the Shadow Realm portal
     if (this.state === GameState.TITLE) {
       const saveInfo = this.checkSavedProgress();
-      if (saveInfo.count < 7) {
+      if (saveInfo.count < 7 && !fromRemoteSync) {
         this.sound.init();
         this.sound.resume();
         this.sound.playUIClick();
@@ -789,8 +789,10 @@ export class Game {
         );
         return;
       }
-      this.loadSavedProgress();
-    } else {
+      if (saveInfo.hasSave) {
+        this.loadSavedProgress();
+      }
+    } else if (!fromRemoteSync) {
       const count = this.crystals.getCollectedCount();
       if (count < 7) {
         this.sound.playUIClick();
@@ -849,10 +851,13 @@ export class Game {
     this.ui.updateWeaponHud(this.weaponSystem.getHudState(this.sharedProgress.inventory.arrows));
     this.syncDarkRealmHudExtras();
     this.ui.showTargetInteractPrompt(this.darkRealm.getSharedInteractTarget());
-    this.multiplayer.broadcastLocalTransform();
+    this.multiplayer.broadcastLocalTransform(true);
+    if (!fromRemoteSync) {
+      this.multiplayer.broadcastPortalTravel('DARK_REALM');
+    }
   }
 
-  public exitDarkRealmToIsland(): void {
+  public exitDarkRealmToIsland(fromRemoteSync: boolean = false): void {
     if (!this.isInDarkRealm) return;
     this.input.resetAllInputs();
     this.ui.resetAllTouchStates();
@@ -883,7 +888,10 @@ export class Game {
     this.setBuildMode(this.sharedProgress.buildMode);
     this.ui.showTargetInteractPrompt(null);
     this.saveSharedBuilding();
-    this.multiplayer.broadcastLocalTransform();
+    this.multiplayer.broadcastLocalTransform(true);
+    if (!fromRemoteSync) {
+      this.multiplayer.broadcastPortalTravel('ISLAND');
+    }
   }
 
   public saveGame(): boolean {

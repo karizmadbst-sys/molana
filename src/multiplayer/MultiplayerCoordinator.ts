@@ -21,7 +21,13 @@ import {
   INetworkTransport,
   OfflineLoopbackTransport,
   WebSocketTransportAdapter,
-  resolveDefaultWebSocketUrl,
+  MultiplayerEndpoints,
+  resolveMultiplayerEndpoints,
+  setCustomMultiplayerServerUrl,
+  getCachedAuthToken,
+  authenticateCloudSession,
+  uploadCloudPlayerSave,
+  downloadCloudPlayerSave,
 } from './NetworkProtocol.ts';
 import { MultiplayerDataIsolation } from './MultiplayerDataIsolation.ts';
 import {
@@ -47,6 +53,10 @@ const DEFAULT_PUBLIC_ROOM_ID = 'ECHO-PUBLIC-1';
 
 export type ConnectionStatus = 'CONNECTING' | 'ONLINE' | 'OFFLINE';
 
+function round3(n: number): number {
+  return Math.round(n * 1000) / 1000;
+}
+
 export class MultiplayerCoordinator implements VoiceSignalSender {
   public account: PlayerAccountManager;
   public party: PartySystem;
@@ -55,7 +65,7 @@ export class MultiplayerCoordinator implements VoiceSignalSender {
   public voice: VoiceChatManager;
   public transport: INetworkTransport;
 
-  public connectionStatus: ConnectionStatus = 'CONNECTING';
+  public connectionStatus: ConnectionStatus = 'OFFLINE';
   public currentRoomId: string = DEFAULT_PUBLIC_ROOM_ID;
   public currentRoomName: string = 'Forgotten Island · Public Sanctuary';
   public currentRoomIsPrivate: boolean = false;
@@ -64,30 +74,43 @@ export class MultiplayerCoordinator implements VoiceSignalSender {
   public chatMessages: ChatMessage[] = [];
   public isApplyingRemoteState: boolean = false;
   public pendingDarkSnapshot: Partial<RoomWorldSnapshot> | null = null;
+  public endpoints: MultiplayerEndpoints = resolveMultiplayerEndpoints();
+  public authToken: string | null = null;
+  public cloudSaveLastSyncAt: number = 0;
 
   // UI Listeners
   public onStateUpdated?: () => void;
   public onChatMessage?: (msg: ChatMessage) => void;
   public onInviteReceived?: (invite: MultiplayerInvite) => void;
   public onVoiceStateChanged?: () => void;
+  public onPortalTravelReceived?: (payload: {
+    initiatorId: string;
+    initiatorName: string;
+    targetRealm: RealmId;
+    scope: 'PARTY' | 'ROOM';
+    crystalsCount?: number;
+  }) => void;
 
   private game!: Game;
   private config: MultiplayerConfig = {
     mode: 'CENTRAL_SERVER',
-    serverUrl: resolveDefaultWebSocketUrl(),
+    serverUrl: this.endpoints.wsUrl,
     reconnectIntervalMs: 3000,
-    maxReconnectAttempts: 8,
+    maxReconnectAttempts: 99,
     sendRateHz: 20,
     interpolationDelayMs: 100,
   };
 
   private syncTimer: number = 0;
-  private readonly syncInterval: number = 1 / 20; // 20Hz transform sync
+  private syncInterval: number = 1 / 20; // 20Hz PC, adapted to 15Hz on mobile
+  private lastTransformSentAt: number = 0;
+  private lastSentSig: string = '';
   private cleanupPacketListener?: () => void;
   private cleanupConnListener?: () => void;
   private desiredRoomId: string | null = null;
   private desiredRoomPassCode: string | undefined = undefined;
   private hasAuthenticatedOnce: boolean = false;
+  private cloudSaveDebounceTimer: number | null = null;
 
   constructor() {
     this.account = new PlayerAccountManager();
@@ -97,6 +120,20 @@ export class MultiplayerCoordinator implements VoiceSignalSender {
     this.voice = new VoiceChatManager(this);
     this.voice.setLocalPlayerId(this.account.getProfile().id);
     this.transport = new OfflineLoopbackTransport();
+    this.authToken = getCachedAuthToken(this.account.getProfile().id);
+
+    // Check URL deep-link ?room=ROOM-XXXXX
+    if (typeof window !== 'undefined' && window.location) {
+      try {
+        const params = new URLSearchParams(window.location.search);
+        const urlRoom = params.get('room');
+        if (urlRoom && urlRoom.trim()) {
+          this.desiredRoomId = urlRoom.trim().toUpperCase();
+        }
+      } catch {
+        // ignore
+      }
+    }
 
     this.party.onPartyChanged = () => {
       this.syncEligibleVoicePeers();
@@ -117,13 +154,39 @@ export class MultiplayerCoordinator implements VoiceSignalSender {
   public init(game: Game): void {
     this.game = game;
     this.game.scene.add(this.remotePlayers.group);
+    if (this.game.isMobileDevice) {
+      this.syncInterval = 1 / 15; // Battery & bandwidth optimized 15Hz sync on mobile
+    }
 
-    // Connect automatically to live central multiplayer WebSocket (/ws)
-    void this.connectToCentralServer(this.config.serverUrl);
+    // Connect automatically if a server URL is configured (Cloudflare Worker or local Express)
+    if (this.endpoints.isConfigured && this.endpoints.wsUrl) {
+      void this.connectToCentralServer(this.endpoints.wsUrl);
+    } else {
+      this.connectionStatus = 'OFFLINE';
+      this.onStateUpdated?.();
+    }
+  }
+
+  public async configureAndConnectServer(rawUrl: string | null): Promise<boolean> {
+    this.endpoints = setCustomMultiplayerServerUrl(rawUrl);
+    if (!this.endpoints.isConfigured || !this.endpoints.wsUrl) {
+      this.transport.disconnect();
+      this.connectionStatus = 'OFFLINE';
+      this.onStateUpdated?.();
+      return false;
+    }
+    return this.connectToCentralServer(this.endpoints.wsUrl);
   }
 
   public async connectToCentralServer(wsUrl?: string): Promise<boolean> {
-    const targetUrl = wsUrl || resolveDefaultWebSocketUrl();
+    this.endpoints = resolveMultiplayerEndpoints();
+    const targetUrl = wsUrl || this.endpoints.wsUrl;
+    if (!targetUrl) {
+      this.connectionStatus = 'OFFLINE';
+      this.onStateUpdated?.();
+      return false;
+    }
+
     this.config.serverUrl = targetUrl;
     this.connectionStatus = 'CONNECTING';
     this.onStateUpdated?.();
@@ -132,7 +195,18 @@ export class MultiplayerCoordinator implements VoiceSignalSender {
     this.cleanupConnListener?.();
     this.transport.disconnect();
 
+    // Authenticate with Cloudflare Worker /api/auth/session for signed session token + D1 upsert
+    const profile = this.account.getProfile();
+    if (this.endpoints.apiUrl) {
+      const authRes = await authenticateCloudSession(this.endpoints.apiUrl, profile);
+      if (authRes?.token) {
+        this.authToken = authRes.token;
+      }
+    }
+
     const wsAdapter = new WebSocketTransportAdapter(targetUrl);
+    wsAdapter.setRoom(this.desiredRoomId || this.currentRoomId || DEFAULT_PUBLIC_ROOM_ID);
+    if (this.authToken) wsAdapter.setToken(this.authToken);
     this.transport = wsAdapter;
 
     this.cleanupPacketListener = this.transport.onPacket((packet) => {
@@ -147,7 +221,11 @@ export class MultiplayerCoordinator implements VoiceSignalSender {
       }
     });
 
-    const ok = await wsAdapter.connect(targetUrl);
+    const ok = await wsAdapter.connect(
+      targetUrl,
+      this.authToken || undefined,
+      this.desiredRoomId || this.currentRoomId || DEFAULT_PUBLIC_ROOM_ID
+    );
     if (!ok) {
       this.connectionStatus = 'OFFLINE';
       this.onStateUpdated?.();
@@ -166,6 +244,7 @@ export class MultiplayerCoordinator implements VoiceSignalSender {
       type: 'C_AUTH',
       profile,
       friendIds: this.friends.getFriendIds(),
+      token: this.authToken || undefined,
     });
     if (this.voice.isEnabled) {
       this.transport.send({
@@ -175,7 +254,11 @@ export class MultiplayerCoordinator implements VoiceSignalSender {
         speaking: this.voice.isSpeaking,
       });
     }
-    if (this.hasAuthenticatedOnce && this.desiredRoomId && this.desiredRoomId !== DEFAULT_PUBLIC_ROOM_ID) {
+    if (
+      this.hasAuthenticatedOnce &&
+      this.desiredRoomId &&
+      this.desiredRoomId !== this.currentRoomId
+    ) {
       this.transport.send({
         type: 'C_JOIN_ROOM',
         roomId: this.desiredRoomId,
@@ -206,9 +289,9 @@ export class MultiplayerCoordinator implements VoiceSignalSender {
   }
 
   /**
-   * Broadcasts local player transform, realm, and animation action state at 20Hz
+   * Broadcasts local player transform, realm, and animation action state at 15-20Hz (idle-throttled & quantized)
    */
-  public broadcastLocalTransform(): void {
+  public broadcastLocalTransform(force: boolean = false): void {
     if (!this.game || !this.game.player || !this.transport.isConnected) return;
 
     const p = this.game.player;
@@ -232,26 +315,40 @@ export class MultiplayerCoordinator implements VoiceSignalSender {
         ? this.game.darkRealm.progress.maxHp
         : this.game.combatSystem?.playerMaxHp ?? 100;
 
+    const rx = round3(p.position.x);
+    const ry = round3(p.position.y);
+    const rz = round3(p.position.z);
+    const angle = round3(p.currentFacingAngle ?? 0);
+    const draw = round3(p.bowDrawAmount || 0);
+
+    const sig = `${rx},${ry},${rz},${angle},${action},${realm},${p.equippedWeapon},${p.isBlocking},${p.isAiming},${draw},${Math.round(hp)}`;
+    const now = performance.now();
+    if (!force && sig === this.lastSentSig && now - this.lastTransformSentAt < 950) {
+      return;
+    }
+    this.lastSentSig = sig;
+    this.lastTransformSentAt = now;
+
     const snapshot: PlayerTransformSnapshot = {
-      x: p.position.x,
-      y: p.position.y,
-      z: p.position.z,
-      vx: p.velocity.x,
-      vy: p.velocity.y,
-      vz: p.velocity.z,
-      facingAngle: p.currentFacingAngle ?? 0,
+      x: rx,
+      y: ry,
+      z: rz,
+      vx: round3(p.velocity.x),
+      vy: round3(p.velocity.y),
+      vz: round3(p.velocity.z),
+      facingAngle: angle,
       isGrounded: p.isGrounded,
       isMoving: p.isMoving,
       isSprinting: p.isSprinting,
       actionState: action,
       comboStep: p.attackComboStep || 1,
       realm,
-      hp,
-      maxHp,
+      hp: Math.round(hp),
+      maxHp: Math.round(maxHp),
       weapon: p.equippedWeapon,
       isBlocking: p.isBlocking,
       isAiming: p.isAiming,
-      bowDraw: p.bowDrawAmount,
+      bowDraw: draw,
       timestamp: Date.now(),
     };
 
@@ -719,8 +816,35 @@ export class MultiplayerCoordinator implements VoiceSignalSender {
         if (packet.success) {
           this.connectionStatus = 'ONLINE';
           this.voice.setLocalPlayerId(packet.sessionPlayerId);
+          this.transport.flushPendingQueue?.();
         }
         this.onStateUpdated?.();
+        break;
+      }
+
+      case 'S_SWITCH_ROOM': {
+        const nextRoom = packet.roomId || DEFAULT_PUBLIC_ROOM_ID;
+        this.desiredRoomId = nextRoom;
+        this.desiredRoomPassCode = packet.passCode;
+        if (this.transport.switchRoom) {
+          void this.transport.switchRoom(nextRoom).then((ok) => {
+            if (!ok) {
+              this.connectionStatus = 'OFFLINE';
+              this.onStateUpdated?.();
+            }
+          });
+        }
+        break;
+      }
+
+      case 'S_PORTAL_TRAVEL': {
+        this.onPortalTravelReceived?.({
+          initiatorId: packet.initiatorId,
+          initiatorName: packet.initiatorName,
+          targetRealm: packet.targetRealm,
+          scope: packet.scope,
+          crystalsCount: packet.crystalsCount,
+        });
         break;
       }
 
@@ -1003,14 +1127,111 @@ export class MultiplayerCoordinator implements VoiceSignalSender {
     );
   }
 
+  public broadcastPortalTravel(targetRealm: RealmId): void {
+    if (!this.transport.isConnected || this.isApplyingRemoteState) return;
+    const hasParty = (this.party.getParty()?.members.length || 0) > 1;
+    this.transport.send({
+      type: 'C_PORTAL_TRAVEL',
+      targetRealm,
+      scope: hasParty ? 'PARTY' : 'ROOM',
+    });
+  }
+
+  public acceptPortalTravel(targetRealm: RealmId, crystalsCount?: number): void {
+    if (!this.game) return;
+    if (targetRealm === 'DARK_REALM' && !this.game.isInDarkRealm) {
+      if ((crystalsCount ?? 0) >= 7 && this.game.crystals.getCollectedCount() < 7) {
+        this.game.crystals.setCollectedState([1, 2, 3, 4, 5, 6, 7]);
+        this.game.ui.updateCrystalProgress(7);
+        this.game.portal.updateCrystalProgress(7);
+      }
+      this.game.enterDarkRealm(true);
+    } else if (targetRealm === 'ISLAND' && this.game.isInDarkRealm) {
+      this.game.exitDarkRealmToIsland(true);
+    }
+  }
+
+  public buildRoomInviteLink(): string {
+    if (typeof window === 'undefined' || !window.location) {
+      return this.currentRoomId;
+    }
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.set('room', this.currentRoomId);
+      if (this.endpoints.wsUrl && (this.endpoints.source === 'storage' || this.endpoints.source === 'query')) {
+        url.searchParams.set('server', this.endpoints.wsUrl);
+      } else {
+        url.searchParams.delete('server');
+      }
+      return url.toString();
+    } catch {
+      return this.currentRoomId;
+    }
+  }
+
   /**
-   * Cleanly saves state with player/world data separation
+   * Cleanly saves state with player/world data separation + non-blocking Cloudflare D1 cloud backup
    */
   public saveGame(): boolean {
     if (!this.game) return false;
     const playerSave = MultiplayerDataIsolation.extractPlayerSave(this.game, this.account.getProfile());
     const worldData = MultiplayerDataIsolation.extractWorldData(this.game, this.account.getProfile().id);
-    return MultiplayerDataIsolation.saveIsolated(playerSave, worldData);
+    const localOk = MultiplayerDataIsolation.saveIsolated(playerSave, worldData);
+
+    // Non-blocking debounced sync to Cloudflare D1 when connected
+    if (this.endpoints.apiUrl && this.authToken) {
+      if (this.cloudSaveDebounceTimer !== null) {
+        window.clearTimeout(this.cloudSaveDebounceTimer);
+      }
+      this.cloudSaveDebounceTimer = window.setTimeout(() => {
+        this.cloudSaveDebounceTimer = null;
+        void this.syncCloudSaveNow();
+      }, 1500);
+    }
+
+    return localOk;
+  }
+
+  public async syncCloudSaveNow(): Promise<boolean> {
+    if (!this.game || !this.endpoints.apiUrl) return false;
+    const profile = this.account.getProfile();
+    if (!this.authToken) {
+      const authRes = await authenticateCloudSession(this.endpoints.apiUrl, profile);
+      if (authRes?.token) this.authToken = authRes.token;
+    }
+    if (!this.authToken) return false;
+
+    const playerSave = MultiplayerDataIsolation.extractPlayerSave(this.game, profile);
+    const darkProgress = this.game.sharedProgress?.serialize() ?? null;
+    const res = await uploadCloudPlayerSave(this.endpoints.apiUrl, this.authToken, playerSave, darkProgress);
+    if (res.ok) {
+      this.cloudSaveLastSyncAt = res.updatedAt || Date.now();
+      this.onStateUpdated?.();
+      return true;
+    }
+    return false;
+  }
+
+  public async restoreCloudSave(): Promise<boolean> {
+    if (!this.game || !this.endpoints.apiUrl) return false;
+    const profile = this.account.getProfile();
+    if (!this.authToken) {
+      const authRes = await authenticateCloudSession(this.endpoints.apiUrl, profile);
+      if (authRes?.token) this.authToken = authRes.token;
+    }
+    if (!this.authToken) return false;
+
+    const res = await downloadCloudPlayerSave(this.endpoints.apiUrl, this.authToken);
+    if (!res.ok || !res.save) return false;
+
+    MultiplayerDataIsolation.applyPlayerSave(this.game, res.save);
+    if (res.darkProgress) {
+      this.game.sharedProgress.deserialize(res.darkProgress);
+      this.game.darkRealm?.ui.refreshHUD();
+    }
+    this.cloudSaveLastSyncAt = res.updatedAt || Date.now();
+    this.onStateUpdated?.();
+    return true;
   }
 
   /**
@@ -1031,6 +1252,10 @@ export class MultiplayerCoordinator implements VoiceSignalSender {
   }
 
   public dispose(): void {
+    if (this.cloudSaveDebounceTimer !== null) {
+      window.clearTimeout(this.cloudSaveDebounceTimer);
+      this.cloudSaveDebounceTimer = null;
+    }
     this.cleanupPacketListener?.();
     this.cleanupConnListener?.();
     this.voice.dispose();

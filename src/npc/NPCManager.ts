@@ -83,7 +83,7 @@ class ForestWanderer {
   public nameEn: string = 'The Shrouded Wanderer';
   public titleAr: string = 'حارس أسرار الغابة الهامسة';
   public titleEn: string = 'Keeper of the Whispering Forest';
-  public portraitUrl: string = '/assets/aistudio/902496527_1823591332005868_4146964911404786464_n_35a4a4fd.jpg';
+  public portraitUrl: string = './assets/aistudio/902496527_1823591332005868_4146964911404786464_n_35a4a4fd.jpg';
 
   private waypoints: THREE.Vector3[] = [
     new THREE.Vector3(-30, 0, 42),
@@ -315,7 +315,7 @@ class TempleGuardian {
   public nameEn: string = 'The Ancient Stone Sentinel';
   public titleAr: string = 'حامي محراب الألواح والعهد';
   public titleEn: string = 'Protector of the Sacred Tablets';
-  public portraitUrl: string = '/assets/aistudio/900710163_2383229942425587_5203725200407765596_n_5dfc21a4.jpg';
+  public portraitUrl: string = './assets/aistudio/900710163_2383229942425587_5203725200407765596_n_5dfc21a4.jpg';
 
   private waypoints: THREE.Vector3[] = [
     new THREE.Vector3(-72, 0, 24),
@@ -580,7 +580,7 @@ class ForestSpiritCreature {
   public nameEn: string;
   public titleAr: string;
   public titleEn: string;
-  public portraitUrl: string = '/assets/aistudio/900555379_1478156927556307_6539741191511944864_n_9ff5ae9c.jpg';
+  public portraitUrl: string = './assets/aistudio/900555379_1478156927556307_6539741191511944864_n_9ff5ae9c.jpg';
 
   private homePos: THREE.Vector3;
   private roamRadius: number = 18;
@@ -1405,7 +1405,7 @@ export class NPCManager {
       speakerNameEn: nameEn,
       titleAr,
       titleEn,
-      portraitUrl: '/assets/aistudio/900555379_1478156927556307_6539741191511944864_n_9ff5ae9c.jpg',
+      portraitUrl: './assets/aistudio/900555379_1478156927556307_6539741191511944864_n_9ff5ae9c.jpg',
       messageAr:
         `يقترب ${nameAr} بسلام نحو يديك... يتألق جسده بنور أثيري دافئ ويبعث رنيناً ناعماً يعيد السكينة إلى روحك. تشعر بأن هذا الكائن يدرك نقاء خطواتك عندما لا تركض بعجلة.`,
       messageEn:

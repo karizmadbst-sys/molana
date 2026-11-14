@@ -305,6 +305,7 @@ export type ClientPacket =
     }
   | { type: 'C_CHAT_MESSAGE'; text: string; channel: 'ROOM' | 'PARTY' | 'FRIENDS' }
   | { type: 'C_VOICE_STATE'; enabled: boolean; muted: boolean; speaking: boolean }
+  | { type: 'C_PORTAL_TRAVEL'; targetRealm: RealmId; scope: 'PARTY' | 'ROOM' }
   | {
       type: 'C_WEBRTC_SIGNAL';
       targetPlayerId: PlayerId;
@@ -406,6 +407,22 @@ export type ServerPacket =
       signalType: 'offer' | 'answer' | 'ice';
       sdp?: RTCSessionDescriptionInit;
       candidate?: RTCIceCandidateInit;
+    }
+  | {
+      type: 'S_PORTAL_TRAVEL';
+      initiatorId: PlayerId;
+      initiatorName: string;
+      targetRealm: RealmId;
+      scope: 'PARTY' | 'ROOM';
+      crystalsCount?: number;
+      timestamp: number;
+    }
+  | {
+      type: 'S_SWITCH_ROOM';
+      roomId: RoomId;
+      roomName: string;
+      passCode?: string;
+      bypassCode?: boolean;
     }
   | { type: 'S_ERROR'; code: string; message: string };
 

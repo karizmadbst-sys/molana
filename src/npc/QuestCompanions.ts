@@ -814,7 +814,7 @@ export class QuestCompanionsManager {
         hairColor: 0x18151a,
         formationOffset: new THREE.Vector2(-2.7, -1.6),
         offsetAngle: -2.2,
-        portraitUrl: '/assets/aistudio/900598433_1164583123191976_1751464669737070361_n_5b0b91d8.jpg',
+        portraitUrl: './assets/aistudio/900598433_1164583123191976_1751464669737070361_n_5b0b91d8.jpg',
       },
       {
         id: 'companion_lyra',
@@ -831,7 +831,7 @@ export class QuestCompanionsManager {
         hairColor: 0xe2e8f0,
         formationOffset: new THREE.Vector2(-1.35, -1.9),
         offsetAngle: 2.2,
-        portraitUrl: '/assets/aistudio/902496527_1823591332005868_4146964911404786464_n_35a4a4fd.jpg',
+        portraitUrl: './assets/aistudio/902496527_1823591332005868_4146964911404786464_n_35a4a4fd.jpg',
       },
       {
         id: 'companion_rowan',
@@ -849,7 +849,7 @@ export class QuestCompanionsManager {
         hooded: true,
         formationOffset: new THREE.Vector2(2.3, -1.7),
         offsetAngle: Math.PI,
-        portraitUrl: '/assets/aistudio/904698870_2436435360497377_3631164325012563485_n_1dc7ed1f.jpg',
+        portraitUrl: './assets/aistudio/904698870_2436435360497377_3631164325012563485_n_1dc7ed1f.jpg',
       },
     ];
 

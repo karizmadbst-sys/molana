@@ -281,7 +281,10 @@ export class GameUI {
   private activeMpTab: 'rooms' | 'party' | 'friends' | 'voice' = 'rooms';
   private voicePermModal!: HTMLElement;
   private mpInviteToast!: HTMLElement;
+  private mpPortalToast!: HTMLElement;
   private activeToastInviteId: string | null = null;
+  private pendingPortalTravel: { targetRealm: 'ISLAND' | 'DARK_REALM'; crystalsCount?: number } | null = null;
+  private portalToastTimer: number | null = null;
   private mpBindingsInitialized: boolean = false;
 
   constructor(private callbacks: UIEventCallbacks) {
@@ -2614,6 +2617,30 @@ export class GameUI {
           transform: translateX(-50%) translateY(0);
           pointer-events: auto;
         }
+        #mp-portal-toast {
+          position: fixed;
+          top: 132px;
+          left: 50%;
+          transform: translateX(-50%) translateY(-16px);
+          opacity: 0;
+          pointer-events: none;
+          background: rgba(12, 16, 36, 0.96);
+          border: 1.5px solid #a855f7;
+          border-radius: 14px;
+          padding: 10px 14px;
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          box-shadow: 0 12px 36px rgba(0, 0, 0, 0.7), 0 0 24px rgba(168, 85, 247, 0.35);
+          z-index: 96;
+          transition: opacity 0.25s ease, transform 0.25s ease;
+          max-width: min(92vw, 500px);
+        }
+        #mp-portal-toast.show {
+          opacity: 1;
+          transform: translateX(-50%) translateY(0);
+          pointer-events: auto;
+        }
 
         /* Multiplayer Hub Tabs & Lists */
         .mp-tabs {
@@ -3371,11 +3398,24 @@ export class GameUI {
                   <div id="mp-current-room-name" style="font-size:0.95rem;font-weight:800;color:#fff;">Forgotten Island · Public Sanctuary</div>
                   <div style="font-size:0.75rem;color:#38bdf8;font-family:monospace;">ROOM ID: <span id="mp-current-room-id">ECHO-PUBLIC-1</span></div>
                 </div>
-                <div style="display:flex;gap:6px;">
+                <div style="display:flex;gap:6px;flex-wrap:wrap;">
                   <button id="mp-copy-room-id-btn" type="button" class="mp-mini-btn interactive">📋 Copy ID</button>
+                  <button id="mp-copy-invite-link-btn" type="button" class="mp-mini-btn gold interactive">🔗 Invite Link</button>
                   <button id="mp-leave-room-btn" type="button" class="mp-mini-btn warn interactive" style="display:none;">Leave to Public</button>
                 </div>
               </div>
+            </div>
+
+            <div class="mp-card-box">
+              <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:4px;">
+                <span style="font-size:0.74rem;color:#38bdf8;font-weight:800;">CLOUDFLARE SERVER · خادم اللعب المباشر</span>
+                <span id="mp-server-source-label" style="font-size:0.68rem;color:#94a3b8;font-family:monospace;">unconfigured</span>
+              </div>
+              <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+                <input id="mp-server-url-input" type="text" class="interactive" placeholder="wss://echo-multiplayer.your-subdomain.workers.dev" style="flex:1;min-width:190px;background:rgba(0,0,0,0.5);border:1px solid rgba(56,189,248,0.35);border-radius:8px;padding:6px 9px;color:#fff;font-size:0.78rem;font-family:monospace;" />
+                <button id="mp-server-connect-btn" type="button" class="mp-mini-btn interactive">⚡ Connect</button>
+              </div>
+              <div id="mp-server-status-hint" style="font-size:0.68rem;color:#94a3b8;margin-top:5px;"></div>
             </div>
 
             <div class="mp-card-box">
@@ -3515,6 +3555,16 @@ export class GameUI {
                 <button id="mp-copy-uuid-btn" class="interactive" style="background:transparent;border:1px solid rgba(56,189,248,0.3);color:#38bdf8;border-radius:4px;padding:0.15rem 0.45rem;font-size:0.7rem;cursor:pointer;">
                   Copy
                 </button>
+              </div>
+              <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;flex-wrap:wrap;margin-top:8px;padding-top:8px;border-top:1px solid rgba(255,255,255,0.08);">
+                <div>
+                  <div style="font-size:0.72rem;color:#00f5d4;font-weight:800;">☁️ CLOUDFLARE D1 CLOUD SAVE · الحفظ السحابي</div>
+                  <div id="mp-cloud-status-text" style="font-size:0.68rem;color:#94a3b8;">Local save active · Connect Cloudflare Worker for D1 backup.</div>
+                </div>
+                <div style="display:flex;gap:6px;">
+                  <button id="mp-cloud-sync-btn" type="button" class="mp-mini-btn interactive">☁️ Save Cloud</button>
+                  <button id="mp-cloud-restore-btn" type="button" class="mp-mini-btn gold interactive">⬇️ Restore</button>
+                </div>
               </div>
             </div>
 
@@ -3770,7 +3820,7 @@ export class GameUI {
           <!-- Header with Portrait and Title -->
           <div style="display: flex; gap: 1.1rem; align-items: center; width: 100%; border-bottom: 1px solid rgba(0, 245, 212, 0.25); padding-bottom: 1rem;">
             <div style="position: relative; width: 78px; height: 78px; border-radius: 50%; border: 2.5px solid #00f5d4; overflow: hidden; box-shadow: 0 0 20px rgba(0, 245, 212, 0.6); flex-shrink: 0; background: #000;">
-              <img id="npc-portrait-img" src="/assets/aistudio/902496527_1823591332005868_4146964911404786464_n_35a4a4fd.jpg" alt="NPC Portrait" referrerpolicy="no-referrer" style="width: 100%; height: 100%; object-fit: cover;" />
+              <img id="npc-portrait-img" src="./assets/aistudio/902496527_1823591332005868_4146964911404786464_n_35a4a4fd.jpg" alt="NPC Portrait" referrerpolicy="no-referrer" style="width: 100%; height: 100%; object-fit: cover;" />
             </div>
             <div style="flex: 1; text-align: right; direction: rtl;">
               <div id="npc-title-badge" class="modal-badge" style="font-size: 0.75rem; color: #fee440; margin-bottom: 0.2rem;">
@@ -3838,6 +3888,16 @@ export class GameUI {
         <button id="mp-invite-decline-btn" type="button" class="mp-mini-btn warn interactive">Decline</button>
       </div>
 
+      <!-- Synchronized Portal Travel Prompt -->
+      <div id="mp-portal-toast" class="interactive">
+        <div style="flex:1;">
+          <div id="mp-portal-toast-title" style="font-size:0.82rem;font-weight:800;color:#e9d5ff;">🌀 Portal Synchronized</div>
+          <div id="mp-portal-toast-sub" style="font-size:0.72rem;color:#cbd5e1;">A companion entered the portal!</div>
+        </div>
+        <button id="mp-portal-accept-btn" type="button" class="mp-mini-btn interactive">Travel Together · السفر معاً</button>
+        <button id="mp-portal-stay-btn" type="button" class="mp-mini-btn warn interactive">Stay</button>
+      </div>
+
       <!-- Landscape Orientation Enforcer (تثبيت الوضع الأفقي فقط على الهواتف) -->
       <div id="portrait-rotate-prompt">
         <div class="rotate-phone-icon">🔄 📱</div>
@@ -3859,6 +3919,7 @@ export class GameUI {
     this.multiplayerModal = document.getElementById('multiplayer-hub-modal')!;
     this.voicePermModal = document.getElementById('voice-permission-modal')!;
     this.mpInviteToast = document.getElementById('mp-invite-toast')!;
+    this.mpPortalToast = document.getElementById('mp-portal-toast')!;
     this.mpChatPanel = document.getElementById('mp-chat-panel')!;
     this.mpChatMessagesEl = document.getElementById('mp-chat-messages')!;
     this.mpChatInput = document.getElementById('mp-chat-input') as HTMLInputElement;
@@ -6003,6 +6064,51 @@ export class GameUI {
       navigator.clipboard?.writeText(coord.currentRoomId).catch(() => {});
       this.showToast(`📋 Copied Room ID: ${coord.currentRoomId}`);
     });
+    document.getElementById('mp-copy-invite-link-btn')?.addEventListener('click', () => {
+      const coord = getCoord();
+      if (!coord) return;
+      const link = coord.buildRoomInviteLink();
+      navigator.clipboard?.writeText(link).catch(() => {});
+      this.showToast(`🔗 Copied Invite Link for Room ${coord.currentRoomId}`);
+    });
+    document.getElementById('mp-server-connect-btn')?.addEventListener('click', async () => {
+      const coord = getCoord();
+      if (!coord) return;
+      const input = document.getElementById('mp-server-url-input') as HTMLInputElement | null;
+      const raw = input?.value.trim() || null;
+      this.showToast(raw ? '⚡ Connecting to Cloudflare Worker...' : 'ℹ️ Cleared custom server URL');
+      const ok = await coord.configureAndConnectServer(raw);
+      if (ok) {
+        this.showToast('🟢 Connected to real-time multiplayer server!');
+      } else if (raw) {
+        this.showToast('⚠️ Could not connect to WebSocket server. Check URL.');
+      }
+      this.updateMultiplayerModalContent();
+    });
+    document.getElementById('mp-cloud-sync-btn')?.addEventListener('click', async () => {
+      const coord = getCoord();
+      if (!coord) return;
+      const ok = await coord.syncCloudSaveNow();
+      this.showToast(ok ? '☁️ Progress saved to Cloudflare D1!' : '⚠️ Connect Cloudflare Worker to sync D1 cloud save.');
+      this.updateMultiplayerModalContent();
+    });
+    document.getElementById('mp-cloud-restore-btn')?.addEventListener('click', async () => {
+      const coord = getCoord();
+      if (!coord) return;
+      const ok = await coord.restoreCloudSave();
+      this.showToast(ok ? '⬇️ Progress restored from Cloudflare D1!' : 'ℹ️ No Cloudflare D1 cloud save found yet.');
+      this.updateMultiplayerModalContent();
+    });
+    document.getElementById('mp-portal-accept-btn')?.addEventListener('click', () => {
+      const coord = getCoord();
+      if (coord && this.pendingPortalTravel) {
+        coord.acceptPortalTravel(this.pendingPortalTravel.targetRealm, this.pendingPortalTravel.crystalsCount);
+      }
+      this.hidePortalTravelToast();
+    });
+    document.getElementById('mp-portal-stay-btn')?.addEventListener('click', () => {
+      this.hidePortalTravelToast();
+    });
     document.getElementById('mp-leave-room-btn')?.addEventListener('click', () => {
       getCoord()?.leaveRoomToPublic();
     });
@@ -6094,6 +6200,9 @@ export class GameUI {
           this.updateMultiplayerModalContent();
         }
       };
+      coord.onPortalTravelReceived = (payload) => {
+        this.showPortalTravelToast(payload);
+      };
       this.renderChatMessages();
       this.updateVoiceHudUI();
       this.updateHudMultiplayerBadge();
@@ -6178,6 +6287,41 @@ export class GameUI {
     if (titleEl) titleEl.textContent = `✉️ ${invite.fromUsername} invited you to ${kindLabel}`;
     if (subEl) subEl.textContent = `Currently in ${realmLabel} · Room ${invite.roomId}`;
     this.mpInviteToast.classList.add('show');
+  }
+
+  private showPortalTravelToast(payload: {
+    initiatorId: string;
+    initiatorName: string;
+    targetRealm: 'ISLAND' | 'DARK_REALM';
+    scope: 'PARTY' | 'ROOM';
+    crystalsCount?: number;
+  }): void {
+    if (!this.mpPortalToast) return;
+    this.pendingPortalTravel = {
+      targetRealm: payload.targetRealm,
+      crystalsCount: payload.crystalsCount,
+    };
+    const titleEl = document.getElementById('mp-portal-toast-title');
+    const subEl = document.getElementById('mp-portal-toast-sub');
+    const destLabel = payload.targetRealm === 'DARK_REALM' ? 'World 2 (Shadow Realm)' : 'World 1 (Forgotten Island)';
+    if (titleEl) titleEl.textContent = `🌀 ${payload.initiatorName} entered ${destLabel}`;
+    if (subEl) subEl.textContent = `Join your ${payload.scope === 'PARTY' ? 'party' : 'room'} through the portal?`;
+    this.mpPortalToast.classList.add('show');
+    if (this.portalToastTimer !== null) {
+      window.clearTimeout(this.portalToastTimer);
+    }
+    this.portalToastTimer = window.setTimeout(() => {
+      this.hidePortalTravelToast();
+    }, 15000);
+  }
+
+  private hidePortalTravelToast(): void {
+    if (this.portalToastTimer !== null) {
+      window.clearTimeout(this.portalToastTimer);
+      this.portalToastTimer = null;
+    }
+    this.pendingPortalTravel = null;
+    this.mpPortalToast?.classList.remove('show');
   }
 
   private openVoicePermissionModal(): void {
@@ -6288,9 +6432,39 @@ export class GameUI {
       } else if (coord.connectionStatus === 'CONNECTING') {
         statusBadge.textContent = '🟡 Connecting to Server...';
         statusBadge.style.color = '#facc15';
+      } else if (!coord.endpoints.isConfigured) {
+        statusBadge.textContent = '⚙️ Set Cloudflare URL';
+        statusBadge.style.color = '#f59e0b';
       } else {
-        statusBadge.textContent = '🔴 Offline Fallback';
+        statusBadge.textContent = '🔴 Reconnecting / Offline';
         statusBadge.style.color = '#fb7185';
+      }
+    }
+
+    // Cloudflare Server Endpoint & Cloud Save status
+    const serverUrlInput = document.getElementById('mp-server-url-input') as HTMLInputElement | null;
+    if (serverUrlInput && document.activeElement !== serverUrlInput) {
+      serverUrlInput.value = coord.endpoints.wsUrl || '';
+    }
+    const serverSourceLabel = document.getElementById('mp-server-source-label');
+    if (serverSourceLabel) {
+      serverSourceLabel.textContent = `source: ${coord.endpoints.source}`;
+    }
+    const serverStatusHint = document.getElementById('mp-server-status-hint');
+    if (serverStatusHint) {
+      serverStatusHint.textContent = coord.endpoints.isConfigured
+        ? `Endpoint: ${coord.endpoints.wsUrl}`
+        : 'Enter your Cloudflare Worker URL (wss://...workers.dev) or set VITE_MULTIPLAYER_WS_URL in GitHub Variables.';
+    }
+    const cloudStatusText = document.getElementById('mp-cloud-status-text');
+    if (cloudStatusText) {
+      if (coord.cloudSaveLastSyncAt > 0) {
+        const t = new Date(coord.cloudSaveLastSyncAt).toLocaleTimeString();
+        cloudStatusText.textContent = `✅ Synced to Cloudflare D1 at ${t}`;
+      } else if (coord.endpoints.apiUrl) {
+        cloudStatusText.textContent = 'Cloudflare D1 ready · Auto-syncs on every save.';
+      } else {
+        cloudStatusText.textContent = 'Local save active · Connect Cloudflare Worker for D1 backup.';
       }
     }
 

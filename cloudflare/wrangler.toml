@@ -1,0 +1,25 @@
+name = "echo-multiplayer-worker"
+main = "src/index.ts"
+compatibility_date = "2025-04-01"
+
+[vars]
+# Comma-separated allowed frontend origins, or "*" for open testing across GitHub Pages / PC / Mobile.
+# Recommended in production: "https://YOUR_GITHUB_USERNAME.github.io,http://localhost:3000"
+ALLOWED_ORIGINS = "*"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "echo-multiplayer-db"
+# Replace with the database_id output from: npx wrangler d1 create echo-multiplayer-db
+database_id = "00000000-0000-0000-0000-000000000000"
+
+[durable_objects]
+bindings = [
+  { name = "ECHO_ROOM", class_name = "EchoRoomDO" },
+  { name = "ECHO_LOBBY", class_name = "EchoLobbyDO" }
+]
+
+[[migrations]]
+tag = "v1"
+# new_sqlite_classes works on both Cloudflare Workers Free and Paid plans
+new_sqlite_classes = ["EchoRoomDO", "EchoLobbyDO"]
